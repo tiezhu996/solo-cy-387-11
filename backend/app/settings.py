@@ -21,6 +21,13 @@ INSTALLED_APPS = [
 MIDDLEWARE = ['django.middleware.common.CommonMiddleware', 'app.middleware.request_log.RequestLogMiddleware']
 ROOT_URLCONF = 'app.urls'
 DATABASES = {'default': dj_database_url.config(default=os.getenv('DATABASE_URL', 'sqlite:///db.sqlite3'))}
+if DATABASES['default'].get('ENGINE') == 'django.db.backends.sqlite3':
+    # 本地 SQLite：IMMEDIATE 事务让写操作在 BEGIN 时即取保留锁，
+    # 后到请求等待（busy timeout）后再做条件更新，避免并发写立刻报 database is locked。
+    # 生产使用 PostgreSQL，行锁 + 条件更新保证同样的串行语义。
+    options = DATABASES['default'].setdefault('OPTIONS', {})
+    options.setdefault('timeout', 20)
+    options.setdefault('transaction_mode', 'IMMEDIATE')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 MEDIA_ROOT = BASE_DIR / 'media'
 MEDIA_URL = '/media/'

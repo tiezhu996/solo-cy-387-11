@@ -8,4 +8,19 @@ body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #f6f8fb
 .facility-list { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .full { width: 100%; }
 .map-panel, .repair { margin: 20px 0; padding: 18px; border: 1px solid #d7dee8; background: white; border-radius: 8px; }
-.repair { display: grid; grid-template-columns: 120px 1fr 120px auto; gap: 12px; align-items: center; }
+.repair { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.repair-title { margin: 0; flex: 1 0 100%; }
+.repair .el-select { width: 120px; }
+.repair .el-input { flex: 1 1 260px; }
+.repair-notice { color: #5b6b82; font-size: 13px; }
+
+/* 物业工单工作台 */
+.workbench { margin: 24px 0 40px; padding: 18px; border: 1px solid #d7dee8; background: white; border-radius: 8px; }
+.workbench-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.workbench-head h2 { margin: 0 0 4px; font-size: 18px; }
+.workbench-head p { margin: 0; color: #5b6b82; font-size: 13px; }
+.workbench-tools { display: flex; gap: 10px; align-items: center; }
+.muted { color: #97a3b4; font-size: 13px; }
+.transfer-line { margin-left: 8px; font-size: 13px; color: #5b6b82; }
+.history-item { display: flex; gap: 8px; align-items: center; }
+.history-reason { margin: 6px 0 0; color: #4a5568; font-size: 13px; }

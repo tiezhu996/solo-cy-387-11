@@ -1,3 +1,23 @@
 HOUSE_STATUS = ('待出租', '已预约', '已签约')
 REPAIR_TYPES = ('水电', '门锁', '管道', '家电', '其他')
 USER_ROLES = ('房东', '租客', '物业人员')
+
+# 工单状态：提交后等待物业接单；接单后处理中；转派待接受期间仍为处理中
+REPAIR_STATUS_SUBMITTED = '已提交'
+REPAIR_STATUS_PROCESSING = '处理中'
+REPAIR_STATUS_COMPLETED = '已完成'
+REPAIR_STATUS = (
+    REPAIR_STATUS_SUBMITTED,
+    REPAIR_STATUS_PROCESSING,
+    REPAIR_STATUS_COMPLETED,
+)
+
+# 转派记录状态：待接受 / 已接受（归属完成切换）/ 已拒绝（回到原处理人）
+TRANSFER_STATUS_PENDING = '待接受'
+TRANSFER_STATUS_ACCEPTED = '已接受'
+TRANSFER_STATUS_REJECTED = '已拒绝'
+TRANSFER_STATUS = (
+    TRANSFER_STATUS_PENDING,
+    TRANSFER_STATUS_ACCEPTED,
+    TRANSFER_STATUS_REJECTED,
+)

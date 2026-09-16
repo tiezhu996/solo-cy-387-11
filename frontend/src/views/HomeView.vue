@@ -25,7 +25,7 @@
     </section>
 
     <section class="repair">
-      <h2>物业报修</h2>
+      <h2 class="repair-title">物业报修</h2>
       <el-select v-model="faultType">
         <el-option label="水电" value="水电" />
         <el-option label="门锁" value="门锁" />
@@ -34,15 +34,19 @@
         <el-option label="其他" value="其他" />
       </el-select>
       <el-input v-model="description" placeholder="描述故障情况" />
-      <el-button type="success" @click="submitRepair">提交工单</el-button>
-      <span>{{ notice }}</span>
+      <el-button type="success" :loading="submitting" @click="submitRepair">提交工单</el-button>
+      <span class="repair-notice">{{ notice }}</span>
     </section>
+
+    <RepairWorkbench ref="workbenchRef" />
   </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import PropertyCard from '../components/PropertyCard.vue';
+import RepairWorkbench from '../components/RepairWorkbench.vue';
 import { createRepair, getProperties } from '../api/client';
 import type { PropertyItem } from '../types/domain';
 
@@ -54,9 +58,15 @@ const layout = ref('全部');
 const faultType = ref('水电');
 const description = ref('');
 const notice = ref('等待提交');
+const submitting = ref(false);
+const workbenchRef = ref<InstanceType<typeof RepairWorkbench> | null>(null);
 
 onMounted(async () => {
-  properties.value = await getProperties();
+  try {
+    properties.value = await getProperties();
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  }
 });
 
 const filtered = computed(() => properties.value.filter((item) => {
@@ -67,7 +77,21 @@ const filtered = computed(() => properties.value.filter((item) => {
 }));
 
 async function submitRepair() {
-  const ticket = await createRepair({ faultType: faultType.value, description: description.value });
-  notice.value = `工单 ${ticket.id} 已提交：${ticket.status}`;
+  if (!description.value.trim()) {
+    ElMessage.warning('请描述故障情况');
+    return;
+  }
+  submitting.value = true;
+  try {
+    const ticket = await createRepair({ faultType: faultType.value, description: description.value });
+    notice.value = `工单 ${ticket.id} 已提交：${ticket.status}`;
+    description.value = '';
+    // 新工单即时出现在下方工作台，刷新后仍可回读
+    await workbenchRef.value?.refresh();
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  } finally {
+    submitting.value = false;
+  }
 }
 </script>

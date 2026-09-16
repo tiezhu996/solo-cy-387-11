@@ -1,6 +1,28 @@
+"""工单列表与报修提交。"""
+
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-class RepairTicketView(APIView):
+from app.apps.repair import selectors, services
+from app.apps.repair.serializers import RepairCreateSerializer, RepairTicketSerializer
+
+
+class RepairTicketListView(APIView):
+    def get(self, request):
+        tickets = list(selectors.ticket_queryset())
+        serializer = RepairTicketSerializer(
+            tickets,
+            many=True,
+            context=selectors.ticket_serializer_context(tickets),
+        )
+        return Response(serializer.data)
+
     def post(self, request):
-        return Response({'id': 9001, 'faultType': request.data.get('faultType'), 'description': request.data.get('description'), 'status': '已提交'})
+        """住户提交报修：保持原入口与响应结构（id/faultType/description/status）。"""
+        serializer = RepairCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ticket = services.submit_ticket(
+            fault_type=serializer.validated_data['faultType'],
+            description=serializer.validated_data['description'],
+        )
+        return Response(RepairTicketSerializer(ticket).data, status=201)
