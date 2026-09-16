@@ -48,6 +48,11 @@ class AddFieldIfMissing(migrations.AddField):
         if _column_info(schema_editor, model._meta.db_table, column) is None:
             super().database_forwards(app_label, schema_editor, from_state, to_state)
 
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        # 条件加列的逆操作不删列：该列可能本就存在（中间版本）或仍承载数据，
+        # RunPython 的 detach_accounts 已解绑关系；保留可空列不影响 0002 模型。
+        return
+
 
 class SetNotNullIfNullable(migrations.AlterField):
     """仅当列当前允许 NULL 时才收紧为 NOT NULL；已经是非空则仅对齐状态。"""
@@ -59,6 +64,20 @@ class SetNotNullIfNullable(migrations.AlterField):
         # null_ok 未知（个别后端不提供）时保守执行真正的 ALTER
         if info is None or getattr(info, 'null_ok', True):
             super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        # 回滚时框架已交换状态：from_state 为非空（当前）、to_state 为可空（迁移前）。
+        # 不能复用 forwards 的“看当前列是否可空”判断（当前是非空会被错误跳过），
+        # 直接把字段从当前非空改回迁移前的可空定义，无条件恢复列可空，
+        # 随后 RunPython 的 detach_accounts 才能把 user 置空。
+        to_model = to_state.apps.get_model(app_label, self.model_name)
+        if self.allow_migrate_model(schema_editor.connection.alias, to_model):
+            from_model = from_state.apps.get_model(app_label, self.model_name)
+            schema_editor.alter_field(
+                from_model,
+                from_model._meta.get_field(self.name),
+                to_model._meta.get_field(self.name),
+            )
 
 
 def _unique_username(taken, candidate):
