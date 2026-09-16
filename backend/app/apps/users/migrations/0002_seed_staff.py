@@ -1,43 +1,26 @@
-"""播种 3 个可登录物业账号及其物业人员档案。
+"""播种物业人员，供接单/转派演示。幂等：同名不重复创建。"""
 
-账号：wangmin / lilei / zhaoqian，密码统一 rentfind123（仅演示用）。
-幂等：按用户名 get_or_create，重复执行不会报错或重复建号。
-"""
-
-from django.contrib.auth.hashers import make_password
 from django.db import migrations
 
 
-SEED_ACCOUNTS = [
-    {'username': 'wangmin', 'name': '王敏', 'phone': '13900000001'},
-    {'username': 'lilei', 'name': '李磊', 'phone': '13900000002'},
-    {'username': 'zhaoqian', 'name': '赵倩', 'phone': '13900000003'},
+SEED_STAFF = [
+    {'name': '王敏', 'phone': '13900000001'},
+    {'name': '李磊', 'phone': '13900000002'},
+    {'name': '赵倩', 'phone': '13900000003'},
 ]
-SEED_PASSWORD = 'rentfind123'
 
 
-def seed_accounts(apps, schema_editor):
-    User = apps.get_model('auth', 'User')
+def seed_staff(apps, schema_editor):
     Staff = apps.get_model('users', 'Staff')
-    for item in SEED_ACCOUNTS:
-        user, _ = User.objects.get_or_create(
-            username=item['username'],
-            defaults={
-                'is_staff': True,
-                'password': make_password(SEED_PASSWORD),
-            },
-        )
-        Staff.objects.get_or_create(
-            user=user,
-            defaults={'name': item['name'], 'phone': item['phone']},
-        )
+    existing = set(Staff.objects.values_list('name', flat=True))
+    Staff.objects.bulk_create(
+        [Staff(**item) for item in SEED_STAFF if item['name'] not in existing]
+    )
 
 
-def remove_accounts(apps, schema_editor):
-    User = apps.get_model('auth', 'User')
-    User.objects.filter(
-        username__in=[a['username'] for a in SEED_ACCOUNTS]
-    ).delete()
+def remove_staff(apps, schema_editor):
+    Staff = apps.get_model('users', 'Staff')
+    Staff.objects.filter(name__in=[item['name'] for item in SEED_STAFF]).delete()
 
 
 class Migration(migrations.Migration):
@@ -46,5 +29,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(seed_accounts, remove_accounts),
+        migrations.RunPython(seed_staff, remove_staff),
     ]
