@@ -1,13 +1,20 @@
-"""工单列表与报修提交。"""
+"""工单列表（登录物业）与报修提交（住户公开提交，保持可用）。"""
 
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from app.apps.repair import selectors, services
+from app.apps.repair.base import StaffAPIView
 from app.apps.repair.serializers import RepairCreateSerializer, RepairTicketSerializer
+from app.apps.users.permissions import IsStaff
 
 
-class RepairTicketListView(APIView):
+class RepairTicketListView(StaffAPIView):
+    # 提交报修面向住户，保持无需登录；列表仅对登录物业人员开放
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return []
+        return [IsStaff()]
+
     def get(self, request):
         tickets = list(selectors.ticket_queryset())
         serializer = RepairTicketSerializer(

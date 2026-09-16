@@ -85,7 +85,7 @@ class TransferRecordSerializer(serializers.ModelSerializer):
 
 
 class TransferCreateSerializer(serializers.Serializer):
-    staffId = serializers.IntegerField()
+    # 只有目标人员编号来自请求；操作人身份取自登录会话，不接受请求里的 staffId
     targetStaffId = serializers.IntegerField()
     reason = serializers.CharField(allow_blank=True, trim_whitespace=False)
 

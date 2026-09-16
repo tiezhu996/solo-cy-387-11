@@ -21,6 +21,10 @@ body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #f6f8fb
 .workbench-head p { margin: 0; color: #5b6b82; font-size: 13px; }
 .workbench-tools { display: flex; gap: 10px; align-items: center; }
 .muted { color: #97a3b4; font-size: 13px; }
+.login-card { max-width: 380px; margin: 8px auto; padding: 28px; border: 1px solid #d7dee8; border-radius: 10px; background: #fbfcfe; }
+.login-card h2 { margin: 0 0 8px; font-size: 20px; }
+.login-card p { margin: 0 0 18px; color: #5b6b82; font-size: 13px; line-height: 1.6; }
+.demo-hint { margin-top: 14px !important; text-align: center; color: #97a3b4 !important; font-size: 12px !important; }
 .transfer-line { margin-left: 8px; font-size: 13px; color: #5b6b82; }
 .history-item { display: flex; gap: 8px; align-items: center; }
 .history-reason { margin: 6px 0 0; color: #4a5568; font-size: 13px; }

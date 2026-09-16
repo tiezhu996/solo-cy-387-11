@@ -1,9 +1,9 @@
-"""转派的发起、记录查询与接受/拒绝。"""
+"""转派的发起、记录查询与接受/拒绝。操作人身份一律取自登录会话。"""
 
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from app.apps.repair import selectors, services
+from app.apps.repair.base import StaffAPIView
 from app.apps.repair.exceptions import RepairBusinessError
 from app.apps.repair.models import TransferRecord
 from app.apps.repair.serializers import (
@@ -13,7 +13,7 @@ from app.apps.repair.serializers import (
 )
 
 
-class TransferListCreateView(APIView):
+class TransferListCreateView(StaffAPIView):
     def get(self, request, ticket_id):
         """回读某工单的全部转派记录（含待接受/已接受/已拒绝）。"""
         ticket = selectors.get_ticket_or_404(ticket_id)
@@ -21,39 +21,36 @@ class TransferListCreateView(APIView):
         return Response(TransferRecordSerializer(records, many=True).data)
 
     def post(self, request, ticket_id):
-        """当前处理人发起转派：目标人员 + 原因。"""
+        """当前登录处理人发起转派：目标人员 + 原因。不能指定他人身份。"""
         serializer = TransferCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         transfer = services.create_transfer(
             ticket_id=ticket_id,
-            staff_id=serializer.validated_data['staffId'],
+            staff=self.current_staff(request),
             target_staff_id=serializer.validated_data['targetStaffId'],
             reason=serializer.validated_data['reason'],
         )
         return Response(TransferRecordSerializer(transfer).data, status=201)
 
 
-class TransferDetailView(APIView):
+class TransferDetailView(StaffAPIView):
     def get(self, request, transfer_id):
         try:
-            transfer = (
-                selectors.transfer_queryset()
-                .get(pk=transfer_id)
-            )
+            transfer = selectors.transfer_queryset().get(pk=transfer_id)
         except (TransferRecord.DoesNotExist, ValueError, TypeError):
             raise RepairBusinessError('TRANSFER_NOT_FOUND', http_status=404)
         return Response(TransferRecordSerializer(transfer).data)
 
 
-class TransferDecisionView(APIView):
-    """接受或拒绝。两种请求并发到达时，行锁保证只有一个生效。"""
+class TransferDecisionView(StaffAPIView):
+    """接受或拒绝。仅转派目标人员本人可调用；两种请求并发到达时只形成一个结果。"""
 
     accepted = True
 
     def post(self, request, transfer_id):
         ticket, transfer = services.decide_transfer(
             transfer_id=transfer_id,
-            staff_id=request.data.get('staffId'),
+            staff=self.current_staff(request),
             accepted=self.accepted,
         )
         return Response({

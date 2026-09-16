@@ -1,4 +1,5 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from app.apps.properties.views import PropertyListView
 from app.apps.booking.views import BookingCreateView
@@ -15,6 +16,7 @@ from app.apps.repair.transfer_views import (
     TransferRejectView,
 )
 from app.apps.repair.views import RepairTicketListView
+from app.apps.users.auth_views import CurrentStaffView, StaffLoginView
 from app.apps.users.views import StaffListView
 
 urlpatterns = [
@@ -22,10 +24,15 @@ urlpatterns = [
     path('api/bookings/', BookingCreateView.as_view()),
     path('api/contracts/', ContractListView.as_view()),
 
-    # 物业人员
+    # 认证：账号密码换取 JWT；身份只认令牌，不再认请求体里的编号
+    path('api/auth/login', StaffLoginView.as_view()),
+    path('api/auth/refresh', TokenRefreshView.as_view()),
+    path('api/auth/me', CurrentStaffView.as_view()),
+
+    # 物业人员名单（登录后可查，用于选择转派目标）
     path('api/staff/', StaffListView.as_view()),
 
-    # 报修工单（POST 提交保持原入口）
+    # 报修工单（POST 提交对住户公开保持原入口；其余操作需登录）
     path('api/repairs/', RepairTicketListView.as_view()),
     path('api/repairs/<int:ticket_id>/', RepairTicketDetailView.as_view()),
     path('api/repairs/<int:ticket_id>/accept', RepairAcceptView.as_view()),

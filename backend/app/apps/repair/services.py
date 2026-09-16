@@ -1,15 +1,18 @@
 """报修工单与转派的领域服务。
 
+身份约定：
+- 所有 staff 入参都必须是视图从“当前登录会话”解析出的物业人员对象，
+  绝不接受请求体里自带的编号，因此无法伪造他人身份。
+- 转派/完成仅允许当前处理人；接受/拒绝仅允许转派目标人员。
+
 并发约束：
-- 所有状态变更都在单个事务内进行，并按固定顺序（工单 → 转派记录）加
-  select_for_update 行锁，Postgres 下接受与拒绝同时到达会被行锁串行化。
-- 决定性写入使用“带状态条件的 UPDATE”（compare-and-set）：
-  仅当工单/转派仍处于预期状态时才生效，affected rows 为 0 即说明已被
-  其他请求抢先处理，抛业务异常回滚。这样即便数据库不支持行锁（SQLite），
-  接受与拒绝同时发生也只形成一个结果。
-- 一张工单至多一条“待接受”转派：持锁期间判断 + 部分唯一约束兜底。
-- 任何业务校验失败都抛 RepairBusinessError，事务回滚，
-  处理人、状态、历史均不会被改动。
+- 状态变更都在单事务内按固定顺序（工单 → 转派记录）加 select_for_update
+  行锁，Postgres 下同时到达的接受与拒绝被行锁串行化。
+- 决定性写入使用带状态条件的 UPDATE（compare-and-set）：仅当记录仍处于
+  预期状态时才生效，affected rows 为 0 即抛业务异常回滚。即便数据库不
+  支持行锁（SQLite），接受与拒绝同时发生也只形成一个结果。
+- 一张工单至多一条“待接受”转派：持锁判断 + 部分唯一约束兜底。
+- 任何校验失败都抛 RepairBusinessError 回滚，处理人、状态、历史均不变。
 """
 
 from django.db import IntegrityError, transaction
@@ -37,15 +40,6 @@ def _validate_fault_type(fault_type):
 def _validate_description(description):
     if not description or not description.strip():
         raise RepairBusinessError('REPAIR_DESCRIPTION_EMPTY')
-
-
-def _get_staff(staff_id):
-    if staff_id in (None, ''):
-        raise RepairBusinessError('STAFF_REQUIRED', http_status=401)
-    try:
-        return Staff.objects.get(pk=staff_id)
-    except (Staff.DoesNotExist, ValueError, TypeError):
-        raise RepairBusinessError('STAFF_NOT_FOUND', http_status=404)
 
 
 def _get_locked_ticket(ticket_id):
@@ -87,7 +81,7 @@ def _get_locked_pending_transfer(transfer_id):
 
 @transaction.atomic
 def submit_ticket(*, fault_type, description):
-    """住户提交报修工单（保持原有入口可用）。"""
+    """住户提交报修工单（公开入口，无需登录，保持可用）。"""
     _validate_fault_type(fault_type)
     _validate_description(description)
     return RepairTicket.objects.create(
@@ -98,9 +92,8 @@ def submit_ticket(*, fault_type, description):
 
 
 @transaction.atomic
-def accept_ticket(*, ticket_id, staff_id):
-    """物业人员接单：仅“已提交”且无处理人的工单可接。"""
-    staff = _get_staff(staff_id)
+def accept_ticket(*, ticket_id, staff):
+    """物业人员接单：仅“已提交”且无处理人的工单可接。身份来自登录会话。"""
     ticket = _get_locked_ticket(ticket_id)
     # compare-and-set：并发接单只有一个请求能把无人处理的已提交工单更新掉
     updated = (
@@ -115,9 +108,8 @@ def accept_ticket(*, ticket_id, staff_id):
 
 
 @transaction.atomic
-def complete_ticket(*, ticket_id, staff_id):
-    """当前处理人完成工单；存在待接受转派时禁止处理。"""
-    staff = _get_staff(staff_id)
+def complete_ticket(*, ticket_id, staff):
+    """仅当前处理人可完成；存在待接受转派时禁止处理。"""
     ticket = _get_locked_ticket(ticket_id)
     if ticket.handler_id != staff.id:
         raise RepairBusinessError('STAFF_FORBIDDEN', http_status=403)
@@ -137,14 +129,17 @@ def complete_ticket(*, ticket_id, staff_id):
 
 
 @transaction.atomic
-def create_transfer(*, ticket_id, staff_id, target_staff_id, reason):
-    """当前处理人发起转派。待接受期间归属不变，也不能处理或再次转派。"""
-    staff = _get_staff(staff_id)
-    target = _get_staff(target_staff_id)
+def create_transfer(*, ticket_id, staff, target_staff_id, reason):
+    """仅当前处理人可发起转派（staff 为登录会话中的本人）。"""
     if not reason or not reason.strip():
         raise RepairBusinessError('TRANSFER_REASON_EMPTY')
-    if target.id == staff.id:
+    try:
+        target_id = int(target_staff_id)
+    except (ValueError, TypeError):
+        raise RepairBusinessError('STAFF_NOT_FOUND', http_status=404)
+    if target_id == staff.id:
         raise RepairBusinessError('TRANSFER_TARGET_SAME_AS_HANDLER')
+
     ticket = _get_locked_ticket(ticket_id)
     if ticket.handler_id != staff.id:
         raise RepairBusinessError('STAFF_FORBIDDEN', http_status=403)
@@ -152,6 +147,12 @@ def create_transfer(*, ticket_id, staff_id, target_staff_id, reason):
         raise RepairBusinessError('REPAIR_NOT_PROCESSABLE')
     if ticket.has_pending_transfer():
         raise RepairBusinessError('REPAIR_TRANSFER_PENDING')
+
+    # 目标人员必须真实存在（目标编号可由请求指定；操作人身份只取登录会话）
+    target = Staff.objects.filter(pk=target_id).first()
+    if target is None:
+        raise RepairBusinessError('STAFF_NOT_FOUND', http_status=404)
+
     try:
         return TransferRecord.objects.create(
             ticket=ticket,
@@ -167,9 +168,12 @@ def create_transfer(*, ticket_id, staff_id, target_staff_id, reason):
 
 
 @transaction.atomic
-def decide_transfer(*, transfer_id, staff_id, accepted):
-    """目标人员接受/拒绝转派。并发的接受与拒绝经行锁/CAS 串行，只有一个生效。"""
-    staff = _get_staff(staff_id)
+def decide_transfer(*, transfer_id, staff, accepted):
+    """仅转派目标人员可接受/拒绝（staff 为登录会话中的本人）。
+
+    请求里即便携带他人编号也不起作用：身份只取会话。并发的接受与拒绝
+    经行锁/CAS 串行，只有一个生效。
+    """
     ticket, transfer = _get_locked_pending_transfer(transfer_id)
     if transfer.to_staff_id != staff.id:
         raise RepairBusinessError('STAFF_FORBIDDEN', http_status=403)

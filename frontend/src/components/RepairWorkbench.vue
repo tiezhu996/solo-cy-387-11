@@ -1,85 +1,100 @@
 <template>
   <section class="workbench">
-    <header class="workbench-head">
-      <div>
-        <h2>物业工单工作台</h2>
-        <p>接单后可转派给其他物业人员；待接受期间原处理人不能处理或再次转派。</p>
-      </div>
-      <div class="workbench-tools">
-        <el-select v-model="currentStaffId" placeholder="选择当前操作身份" style="width: 200px">
-          <el-option v-for="s in staff" :key="s.id" :label="`${s.name}（${s.phone || '物业'}）`" :value="s.id" />
-        </el-select>
-        <el-button :loading="loading" @click="refresh">刷新</el-button>
-      </div>
-    </header>
+    <!-- 未登录：登录卡片 -->
+    <div v-if="!currentStaff" class="login-card">
+      <h2>物业工单工作台</h2>
+      <p>请使用物业账号登录，身份以登录会话为准，不能由请求参数指定。</p>
+      <el-form @submit.prevent>
+        <el-form-item>
+          <el-input v-model="loginForm.username" placeholder="账号" size="large" />
+        </el-form-item>
+        <el-form-item>
+          <el-input v-model="loginForm.password" type="password" placeholder="密码" size="large"
+                    show-password @keyup.enter="onLogin" />
+        </el-form-item>
+        <el-button type="primary" size="large" class="full" :loading="loggingIn" @click="onLogin">
+          登录
+        </el-button>
+      </el-form>
+      <p class="demo-hint">
+        演示账号：wangmin / lilei / zhaoqian，密码统一 rentfind123
+      </p>
+    </div>
 
-    <el-alert
-      v-if="!currentStaffId"
-      type="info"
-      :closable="false"
-      title="请先在右上角选择当前登录的物业人员身份"
-      style="margin-bottom: 12px"
-    />
+    <!-- 已登录：工作台 -->
+    <template v-else>
+      <header class="workbench-head">
+        <div>
+          <h2>物业工单工作台</h2>
+          <p>接单后可转派给其他物业人员；待接受期间原处理人不能处理或再次转派。</p>
+        </div>
+        <div class="workbench-tools">
+          <el-tag size="large" type="success">当前身份：{{ currentStaff.name }}</el-tag>
+          <el-button :loading="loading" @click="refresh">刷新</el-button>
+          <el-button @click="onLogout">退出登录</el-button>
+        </div>
+      </header>
 
-    <el-table :data="tickets" v-loading="loading" border size="default">
-      <el-table-column prop="id" label="工单号" width="80" />
-      <el-table-column prop="faultType" label="类型" width="80" />
-      <el-table-column prop="description" label="故障描述" min-width="180" show-overflow-tooltip />
-      <el-table-column label="状态" width="100">
-        <template #default="scope">
-          <el-tag :type="statusTagType(scope.row.status)">{{ scope.row.status }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="当前处理人" width="110">
-        <template #default="scope">{{ scope.row.handlerName ?? '—' }}</template>
-      </el-table-column>
-      <el-table-column label="转派情况" min-width="200">
-        <template #default="scope">
-          <template v-if="scope.row.hasPendingTransfer">
-            <el-tag type="warning" size="small">待接受</el-tag>
-            <span class="transfer-line">
-              {{ scope.row.handlerName }} → {{ scope.row.pendingToStaffName }}
-            </span>
+      <el-table :data="tickets" v-loading="loading" border size="default">
+        <el-table-column prop="id" label="工单号" width="80" />
+        <el-table-column prop="faultType" label="类型" width="80" />
+        <el-table-column prop="description" label="故障描述" min-width="180" show-overflow-tooltip />
+        <el-table-column label="状态" width="100">
+          <template #default="scope">
+            <el-tag :type="statusTagType(scope.row.status)">{{ scope.row.status }}</el-tag>
           </template>
-          <span v-else class="muted">无待处理转派</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="320" fixed="right">
-        <template #default="scope">
-          <el-button v-if="scope.row.status === '已提交' && !scope.row.handlerId"
-                     type="primary" size="small"
-                     :disabled="!currentStaffId || busy === scope.row.id"
-                     @click="onAccept(scope.row)">接单</el-button>
-
-          <template v-if="scope.row.status === '处理中' && scope.row.hasPendingTransfer">
-            <template v-if="currentStaffId === scope.row.pendingToStaffId">
-              <el-button type="success" size="small" :loading="busy === scope.row.id"
-                         @click="onAcceptTransfer(scope.row)">接受</el-button>
-              <el-button type="danger" size="small" :loading="busy === scope.row.id"
-                         @click="onRejectTransfer(scope.row)">拒绝</el-button>
+        </el-table-column>
+        <el-table-column label="当前处理人" width="110">
+          <template #default="scope">{{ scope.row.handlerName ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="转派情况" min-width="200">
+          <template #default="scope">
+            <template v-if="scope.row.hasPendingTransfer">
+              <el-tag type="warning" size="small">待接受</el-tag>
+              <span class="transfer-line">
+                {{ scope.row.handlerName }} → {{ scope.row.pendingToStaffName }}
+              </span>
             </template>
-            <el-tooltip v-else-if="currentStaffId === scope.row.handlerId"
-                        content="转派待接受，期间不能处理或再次转派" placement="top">
-              <el-button size="small" disabled>待对方响应</el-button>
-            </el-tooltip>
-            <span v-else class="muted">等待 {{ scope.row.pendingToStaffName }} 响应</span>
+            <span v-else class="muted">无待处理转派</span>
           </template>
+        </el-table-column>
+        <el-table-column label="操作" width="320" fixed="right">
+          <template #default="scope">
+            <el-button v-if="scope.row.status === '已提交' && !scope.row.handlerId"
+                       type="primary" size="small"
+                       :loading="busy === scope.row.id"
+                       @click="onAccept(scope.row)">接单</el-button>
 
-          <template v-if="scope.row.status === '处理中' && !scope.row.hasPendingTransfer">
-            <el-button type="warning" size="small"
-                       :disabled="currentStaffId !== scope.row.handlerId || busy === scope.row.id"
-                       @click="openTransfer(scope.row)">转派</el-button>
-            <el-button type="success" size="small"
-                       :disabled="currentStaffId !== scope.row.handlerId || busy === scope.row.id"
-                       @click="onComplete(scope.row)">完成</el-button>
+            <template v-if="scope.row.status === '处理中' && scope.row.hasPendingTransfer">
+              <template v-if="currentStaff.id === scope.row.pendingToStaffId">
+                <el-button type="success" size="small" :loading="busy === scope.row.id"
+                           @click="onAcceptTransfer(scope.row)">接受</el-button>
+                <el-button type="danger" size="small" :loading="busy === scope.row.id"
+                           @click="onRejectTransfer(scope.row)">拒绝</el-button>
+              </template>
+              <el-tooltip v-else-if="currentStaff.id === scope.row.handlerId"
+                          content="转派待接受，期间不能处理或再次转派" placement="top">
+                <el-button size="small" disabled>待对方响应</el-button>
+              </el-tooltip>
+              <span v-else class="muted">等待 {{ scope.row.pendingToStaffName }} 响应</span>
+            </template>
+
+            <template v-if="scope.row.status === '处理中' && !scope.row.hasPendingTransfer">
+              <el-button type="warning" size="small"
+                         :disabled="currentStaff.id !== scope.row.handlerId || busy === scope.row.id"
+                         @click="openTransfer(scope.row)">转派</el-button>
+              <el-button type="success" size="small"
+                         :disabled="currentStaff.id !== scope.row.handlerId || busy === scope.row.id"
+                         @click="onComplete(scope.row)">完成</el-button>
+            </template>
+
+            <span v-if="scope.row.status === '已完成'" class="muted">工单已结束</span>
+
+            <el-button link type="primary" size="small" @click="openHistory(scope.row)">转派记录</el-button>
           </template>
-
-          <span v-if="scope.row.status === '已完成'" class="muted">工单已结束</span>
-
-          <el-button link type="primary" size="small" @click="openHistory(scope.row)">转派记录</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+        </el-table-column>
+      </el-table>
+    </template>
 
     <!-- 发起转派 -->
     <el-dialog v-model="transferDialogVisible" title="转派工单" width="460px">
@@ -117,7 +132,7 @@
         <el-timeline-item
           v-for="r in historyRecords"
           :key="r.id"
-          :timestamp="r.decidedAt ? `${r.createdAt} 发起 · ${r.decidedAt} 决策` : `${r.createdAt} 发起`"
+          :timestamp="formatTime(r)"
           placement="top"
           :type="r.status === '已接受' ? 'success' : r.status === '已拒绝' ? 'danger' : 'warning'"
         >
@@ -141,27 +156,83 @@ import {
   acceptTransfer,
   completeRepair,
   createTransfer,
+  getCurrentStaff,
   listRepairs,
   listStaff,
   listTransfers,
+  login,
+  onUnauthorized,
   rejectTransfer,
 } from '../api/client';
+import { clearSession, getCurrentStaff as cachedStaff, saveSession } from '../api/auth';
 import type { RepairTicket, Staff, TransferRecord, TransferStatus } from '../types/domain';
 
 const staff = ref<Staff[]>([]);
 const tickets = ref<RepairTicket[]>([]);
-const currentStaffId = ref<number | null>(null);
+const currentStaff = ref<Staff | null>(null);
 const loading = ref(false);
 const busy = ref<number | null>(null);
 
-async function loadStaff() {
-  staff.value = await listStaff();
-  if (!currentStaffId.value && staff.value.length) {
-    currentStaffId.value = staff.value[0].id;
+// ---------- 登录态 ----------
+
+const loggingIn = ref(false);
+const loginForm = ref({ username: '', password: '' });
+
+onUnauthorized(() => {
+  // 令牌失效/过期：清会话并回到登录卡片
+  clearSession();
+  currentStaff.value = null;
+});
+
+async function restoreSession(): Promise<void> {
+  if (!cachedStaff()) return;
+  try {
+    currentStaff.value = await getCurrentStaff();
+    await loadStaffList();
+    await refresh();
+  } catch {
+    clearSession();
+    currentStaff.value = null;
   }
 }
 
-async function refresh() {
+async function onLogin(): Promise<void> {
+  if (!loginForm.value.username.trim() || !loginForm.value.password) {
+    ElMessage.warning('请输入账号和密码');
+    return;
+  }
+  loggingIn.value = true;
+  try {
+    const result = await login(loginForm.value.username.trim(), loginForm.value.password);
+    saveSession(result);
+    currentStaff.value = result.staff;
+    ElMessage.success(`欢迎，${result.staff.name}`);
+    loginForm.value.password = '';
+    await loadStaffList();
+    await refresh();
+  } catch (error) {
+    ElMessage.error((error as Error).message || '登录失败');
+  } finally {
+    loggingIn.value = false;
+  }
+}
+
+function onLogout(): void {
+  clearSession();
+  currentStaff.value = null;
+  tickets.value = [];
+}
+
+async function loadStaffList(): Promise<void> {
+  staff.value = await listStaff();
+}
+
+onMounted(restoreSession);
+
+// ---------- 数据 ----------
+
+async function refresh(): Promise<void> {
+  if (!currentStaff.value) return; // 未登录（住户视角）不加载工单
   loading.value = true;
   try {
     tickets.value = await listRepairs();
@@ -175,15 +246,6 @@ async function refresh() {
   }
 }
 
-onMounted(async () => {
-  try {
-    await loadStaff();
-    await refresh();
-  } catch (error) {
-    ElMessage.error((error as Error).message);
-  }
-});
-
 function statusTagType(status: string): 'info' | 'warning' | 'success' {
   if (status === '已完成') return 'success';
   if (status === '处理中') return 'warning';
@@ -196,13 +258,16 @@ function historyTagType(status: TransferStatus): 'warning' | 'success' | 'danger
   return 'warning';
 }
 
-// ---------- 接单 / 完成 ----------
+function formatTime(r: TransferRecord): string {
+  return r.decidedAt ? `${r.createdAt} 发起 · ${r.decidedAt} 决策` : `${r.createdAt} 发起`;
+}
 
-async function onAccept(row: RepairTicket) {
-  if (!currentStaffId.value) return;
+// ---------- 接单 / 完成（身份凭 token） ----------
+
+async function onAccept(row: RepairTicket): Promise<void> {
   busy.value = row.id;
   try {
-    await acceptRepair(row.id, currentStaffId.value);
+    await acceptRepair(row.id);
     ElMessage.success(`已接单：工单 #${row.id}`);
     await refresh();
   } catch (error) {
@@ -212,11 +277,10 @@ async function onAccept(row: RepairTicket) {
   }
 }
 
-async function onComplete(row: RepairTicket) {
-  if (!currentStaffId.value) return;
+async function onComplete(row: RepairTicket): Promise<void> {
   busy.value = row.id;
   try {
-    await completeRepair(row.id, currentStaffId.value);
+    await completeRepair(row.id);
     ElMessage.success(`工单 #${row.id} 已完成`);
     await refresh();
   } catch (error) {
@@ -239,10 +303,10 @@ const transferForm = ref({
 });
 
 const transferTargets = computed(() =>
-  staff.value.filter((s) => s.name !== transferForm.value.fromName),
+  staff.value.filter((s) => s.id !== currentStaff.value?.id),
 );
 
-function openTransfer(row: RepairTicket) {
+function openTransfer(row: RepairTicket): void {
   transferForm.value = {
     ticketId: row.id,
     faultType: row.faultType,
@@ -253,7 +317,7 @@ function openTransfer(row: RepairTicket) {
   transferDialogVisible.value = true;
 }
 
-async function onSubmitTransfer() {
+async function onSubmitTransfer(): Promise<void> {
   if (transferForm.value.targetStaffId === null) {
     ElMessage.warning('请选择转派目标人员');
     return;
@@ -262,11 +326,9 @@ async function onSubmitTransfer() {
     ElMessage.warning('请填写转派原因');
     return;
   }
-  if (!currentStaffId.value) return;
   submitting.value = true;
   try {
     await createTransfer(transferForm.value.ticketId, {
-      staffId: currentStaffId.value,
       targetStaffId: transferForm.value.targetStaffId,
       reason: transferForm.value.reason.trim(),
     });
@@ -280,28 +342,28 @@ async function onSubmitTransfer() {
   }
 }
 
-// ---------- 接受 / 拒绝 ----------
+// ---------- 接受 / 拒绝（仅目标本人，凭 token 判定） ----------
 
-async function onAcceptTransfer(row: RepairTicket) {
-  if (!currentStaffId.value || !row.pendingTransferId) return;
+async function onAcceptTransfer(row: RepairTicket): Promise<void> {
+  if (!row.pendingTransferId) return;
   busy.value = row.id;
   try {
-    await acceptTransfer(row.pendingTransferId, currentStaffId.value);
+    await acceptTransfer(row.pendingTransferId);
     ElMessage.success(`已接受工单 #${row.id}，归属已切换到你名下`);
     await refresh();
   } catch (error) {
     ElMessage.error((error as Error).message);
-    await refresh(); // 可能已被对方先处理：刷新回读真实归属
+    await refresh(); // 可能已被并发先处理：回读真实归属
   } finally {
     busy.value = null;
   }
 }
 
-async function onRejectTransfer(row: RepairTicket) {
-  if (!currentStaffId.value || !row.pendingTransferId) return;
+async function onRejectTransfer(row: RepairTicket): Promise<void> {
+  if (!row.pendingTransferId) return;
   busy.value = row.id;
   try {
-    await rejectTransfer(row.pendingTransferId, currentStaffId.value);
+    await rejectTransfer(row.pendingTransferId);
     ElMessage.info(`已拒绝工单 #${row.id}，工单回到原处理人`);
     await refresh();
   } catch (error) {
@@ -319,7 +381,7 @@ const historyLoading = ref(false);
 const historyTicketId = ref<number | null>(null);
 const historyRecords = ref<TransferRecord[]>([]);
 
-async function loadHistory(ticketId: number) {
+async function loadHistory(ticketId: number): Promise<void> {
   historyLoading.value = true;
   try {
     historyRecords.value = await listTransfers(ticketId);
@@ -328,7 +390,7 @@ async function loadHistory(ticketId: number) {
   }
 }
 
-async function openHistory(row: RepairTicket) {
+async function openHistory(row: RepairTicket): Promise<void> {
   historyTicketId.value = row.id;
   historyRecords.value = [];
   historyVisible.value = true;

@@ -13,7 +13,6 @@ ERROR_CODES = {
 
     # 物业人员
     'STAFF_NOT_FOUND': 'STAFF_NOT_FOUND',
-    'STAFF_REQUIRED': 'STAFF_REQUIRED',
     'STAFF_FORBIDDEN': 'STAFF_FORBIDDEN',
 
     # 转派
@@ -31,7 +30,6 @@ ERROR_MESSAGES = {
     'REPAIR_NOT_PROCESSABLE': '当前工单不可执行该操作',
     'REPAIR_TRANSFER_PENDING': '工单存在待接受的转派，原处理人暂不能处理或再次转派',
     'STAFF_NOT_FOUND': '物业人员不存在',
-    'STAFF_REQUIRED': '缺少操作人员（staffId）',
     'STAFF_FORBIDDEN': '当前物业人员无权操作该工单',
     'TRANSFER_NOT_FOUND': '转派记录不存在',
     'TRANSFER_TARGET_SAME_AS_HANDLER': '转派目标不能是当前处理人本人',

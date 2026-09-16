@@ -1,4 +1,6 @@
+import { getAccessToken } from './auth';
 import type {
+  LoginResult,
   PropertyItem,
   RepairTicket,
   Staff,
@@ -7,25 +9,62 @@ import type {
 
 const API_BASE = '/api';
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+/** 会话失效回调（401）：由工作台注册，回到登录卡片。 */
+let unauthorizedHandler: (() => void) | null = null;
+
+export function onUnauthorized(handler: () => void): void {
+  unauthorizedHandler = handler;
+}
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function request<T>(url: string, options: RequestInit = {}, auth = true): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set('Content-Type', 'application/json');
+  if (auth) {
+    const token = getAccessToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_BASE}${url}`, { ...options, headers });
   if (!response.ok) {
-    let payload: { error?: { message?: string } } = {};
+    let payload: { code?: string; error?: { message?: string; detail?: string }; detail?: string } = {};
     try {
       payload = await response.json();
     } catch {
       payload = {};
     }
-    throw new Error(payload.error?.message ?? `请求失败（${response.status}）`);
+    const message = payload.error?.message ?? payload.error?.detail ?? payload.detail ?? `请求失败（${response.status}）`;
+    if (response.status === 401 && unauthorizedHandler) {
+      unauthorizedHandler();
+    }
+    throw new ApiError(response.status, message, payload.code);
   }
   return response.json() as Promise<T>;
 }
 
+export async function login(username: string, password: string): Promise<LoginResult> {
+  return request<LoginResult>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  }, false);
+}
+
+export async function getCurrentStaff(): Promise<Staff> {
+  return request<Staff>('/auth/me');
+}
+
 export async function getProperties(): Promise<PropertyItem[]> {
-  return request<PropertyItem[]>('/properties/');
+  return request<PropertyItem[]>('/properties/', {}, false);
 }
 
 // ---------- 报修 ----------
@@ -33,32 +72,24 @@ export async function getProperties(): Promise<PropertyItem[]> {
 export async function createRepair(
   ticket: Pick<RepairTicket, 'faultType' | 'description'>,
 ): Promise<RepairTicket> {
+  // 住户公开提交，无需登录
   return request<RepairTicket>('/repairs/', {
     method: 'POST',
     body: JSON.stringify(ticket),
-  });
+  }, false);
 }
 
 export async function listRepairs(): Promise<RepairTicket[]> {
   return request<RepairTicket[]>('/repairs/');
 }
 
-export async function getRepair(id: number): Promise<RepairTicket> {
-  return request<RepairTicket>(`/repairs/${id}/`);
+export async function acceptRepair(id: number): Promise<RepairTicket> {
+  // 身份来自 JWT，不传任何 staffId
+  return request<RepairTicket>(`/repairs/${id}/accept`, { method: 'POST', body: '{}' });
 }
 
-export async function acceptRepair(id: number, staffId: number): Promise<RepairTicket> {
-  return request<RepairTicket>(`/repairs/${id}/accept`, {
-    method: 'POST',
-    body: JSON.stringify({ staffId }),
-  });
-}
-
-export async function completeRepair(id: number, staffId: number): Promise<RepairTicket> {
-  return request<RepairTicket>(`/repairs/${id}/complete`, {
-    method: 'POST',
-    body: JSON.stringify({ staffId }),
-  });
+export async function completeRepair(id: number): Promise<RepairTicket> {
+  return request<RepairTicket>(`/repairs/${id}/complete`, { method: 'POST', body: '{}' });
 }
 
 // ---------- 转派 ----------
@@ -69,7 +100,7 @@ export async function listTransfers(ticketId: number): Promise<TransferRecord[]>
 
 export async function createTransfer(
   ticketId: number,
-  payload: { staffId: number; targetStaffId: number; reason: string },
+  payload: { targetStaffId: number; reason: string },
 ): Promise<TransferRecord> {
   return request<TransferRecord>(`/repairs/${ticketId}/transfers/`, {
     method: 'POST',
@@ -82,18 +113,12 @@ export interface TransferDecision {
   transfer: TransferRecord;
 }
 
-export async function acceptTransfer(transferId: number, staffId: number): Promise<TransferDecision> {
-  return request<TransferDecision>(`/transfers/${transferId}/accept`, {
-    method: 'POST',
-    body: JSON.stringify({ staffId }),
-  });
+export async function acceptTransfer(transferId: number): Promise<TransferDecision> {
+  return request<TransferDecision>(`/transfers/${transferId}/accept`, { method: 'POST', body: '{}' });
 }
 
-export async function rejectTransfer(transferId: number, staffId: number): Promise<TransferDecision> {
-  return request<TransferDecision>(`/transfers/${transferId}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ staffId }),
-  });
+export async function rejectTransfer(transferId: number): Promise<TransferDecision> {
+  return request<TransferDecision>(`/transfers/${transferId}/reject`, { method: 'POST', body: '{}' });
 }
 
 // ---------- 物业人员 ----------

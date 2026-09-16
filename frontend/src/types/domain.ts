@@ -18,6 +18,12 @@ export interface Staff {
   phone: string;
 }
 
+export interface LoginResult {
+  access: string;
+  refresh: string;
+  staff: Staff;
+}
+
 export interface RepairTicket {
   id: number;
   faultType: string;
