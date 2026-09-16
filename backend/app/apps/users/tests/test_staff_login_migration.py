@@ -5,11 +5,15 @@
 人员混排。验证：一人一号、既有账号不被顶替或误启用、冲突分配稳定、
 重入不产生重复账号、升级失败整体回滚。
 
-每个用例都先把 users 应用回滚到旧结构（0002）、重置为干净旧基线并
-重置自增序列，再自行构造输入；用例结束后把应用迁回最新节点，数据随
-事务自动清理，不依赖人工清空，可反复执行。
+数据库无关：不写任何后端专有 DDL/SQL。旧结构构造用 Django Schema Editor
+（PostgreSQL 走 ALTER TABLE DROP COLUMN，SQLite 自动表重建），旧表数据
+用 0002 历史模型 ORM 写入，列结构用 Django 内省读取，参数绑定统一用
+Django 的 %%s。SQLite 与 PostgreSQL 上同一套用例完成旧结构构造、升级
+和失败回滚，不跳过回滚场景、也不为单一后端走专用路径。
 
-确定性（序列重置 + 固定创建顺序）下人员 ID：
+每个用例都先把 users 应用回滚到旧结构（0002）并重置为干净旧基线，
+再自行构造输入；用例结束后把应用迁回最新节点，数据随事务自动清理，
+不依赖人工清空，可反复执行。人员主键显式指定，跨后端/用例稳定：
 王敏=1 李磊=2 赵倩=3 孙水电=4 钱运维=5 周空号=6 冯同号A=7 陈同号B=8 楚停用=9
 """
 
@@ -62,54 +66,41 @@ class StaffLoginAccountUpgradeTests(TransactionTestCase):
             )
 
     @staticmethod
-    def _reset_sequences():
-        """重置 users_staff / auth_user 自增序列，保证跨用例 ID 稳定。"""
-        with connection.cursor() as cur:
-            if connection.vendor == 'sqlite':
-                cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('users_staff','auth_user')")
-            elif connection.vendor == 'postgresql':
-                cur.execute(
-                    "SELECT setval(pg_get_serial_sequence('users_staff','id'),"
-                    "COALESCE((SELECT MAX(id) FROM users_staff),1), "
-                    "(SELECT COUNT(*) FROM users_staff) > 0)"
-                )
-                cur.execute(
-                    "SELECT setval(pg_get_serial_sequence('auth_user','id'),"
-                    "COALESCE((SELECT MAX(id) FROM auth_user),1), "
-                    "(SELECT COUNT(*) FROM auth_user) > 0)"
-                )
+    def _column_names(table):
+        """跨后端返回表的列名集合（Django 内省，不用任何后端专有 SQL）。"""
+        with connection.cursor() as cursor:
+            description = connection.introspection.get_table_description(cursor, table)
+        return {column.name for column in description}
 
     @staticmethod
-    def _rebuild_old_shape_table():
-        """把 users_staff 物理重建为迁移前结构（无 user_id 列）。
+    def _old_state_apps():
+        """users 停在 0002 时的历史应用注册表（Staff 尚不含 user 字段）。"""
+        from django.db.migrations.executor import MigrationExecutor
 
-        SQLite 不允许直接 DROP 带 UNIQUE 约束的列，按官方推荐的
-        “建新表-拷数据-换名”方式重建。重建后只能用原生 SQL 访问旧表。
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        return executor.loader.project_state([('users', MIGRATION_OLD)]).apps
+
+    def _drop_user_column(self):
+        """用 Django Schema Editor 物理移除 users_staff.user_id 列。
+
+        同一份代码在两种后端上都成立：PostgreSQL 走 ALTER TABLE DROP COLUMN，
+        SQLite 由其 schema editor 自动执行“建新表-拷数据-换名”重建
+        （该列带唯一/FK 约束，SQLite 不允许直接 DROP）。重建时以“当前模型
+        字段减去 user 列”生成新表，恰好等于旧的四列结构。不写任何后端专有
+        DDL，也不是跳过回滚的假路径。
         """
-        with connection.cursor() as cur:
-            cur.execute("PRAGMA table_info(users_staff)")
-            if not any(row[1] == 'user_id' for row in cur.fetchall()):
-                return
-            cur.executescript(
-                """
-                CREATE TABLE users_staff_oldshape (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    name VARCHAR(40) NOT NULL UNIQUE,
-                    phone VARCHAR(30) NOT NULL DEFAULT '',
-                    created_at DATETIME NOT NULL
-                );
-                INSERT INTO users_staff_oldshape (id, name, phone, created_at)
-                    SELECT id, name, phone, created_at FROM users_staff;
-                DROP TABLE users_staff;
-                ALTER TABLE users_staff_oldshape RENAME TO users_staff;
-                """
-            )
+        current_staff = self.model_at('users', 'Staff')
+        user_field = current_staff._meta.get_field('user')
+        with connection.schema_editor() as schema_editor:
+            schema_editor.remove_field(current_staff, user_field)
 
     def reset_to_old_baseline(self, physically_old=False):
         """回滚到旧结构并构造干净基线：3 个无账号播种人员。
 
-        physically_old=True 时连 user_id 列都物理移除（模拟从未升级过的库），
-        此后在重新升级前只能使用原生 SQL 访问 users_staff。
+        physically_old=True 时连 user_id 列都用 Schema Editor 物理移除
+        （模拟从未升级过的库）。两种后端走同一套 Django API；
+        人员主键显式指定，不依赖序列重置，跨后端/跨用例 ID 稳定。
         """
         # repair 种子数据以 PROTECT 外键引用 Staff，回滚 users 前先清数据
         try:
@@ -120,30 +111,24 @@ class StaffLoginAccountUpgradeTests(TransactionTestCase):
         call_command('migrate', 'users', MIGRATION_OLD, verbosity=0, interactive=False)
 
         if physically_old:
-            # 列被物理删除，旧态清理与播种走原生 SQL
-            self._rebuild_old_shape_table()
-            with connection.cursor() as cur:
-                cur.execute("DELETE FROM auth_user")
-                cur.execute("DELETE FROM users_staff")
-            # 必须先归零序列、再播种，人员 ID 才能跨用例稳定为 1..9
-            self._reset_sequences()
-            with connection.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO users_staff (name, phone, created_at) VALUES (%s, %s, '2026-01-01 00:00:00')"
-                    if connection.vendor == 'postgresql'
-                    else "INSERT INTO users_staff (name, phone, created_at) VALUES (?, ?, '2026-01-01 00:00:00')",
-                    SEED_STAFF,
-                )
-            return None, None
+            # 列尚在时用当前模型清空；auth_user 表不受删列影响，始终用当前 User
+            self.model_at('users', 'Staff').objects.all().delete()
+            self.model_at('auth', 'User').objects.all().delete()
+            self._drop_user_column()
+            # 删除后 users_staff 只能用 0002 历史模型（不含 user 字段）访问
+            old_staff = self._old_state_apps().get_model('users', 'Staff')
+            OldUser = self.model_at('auth', 'User')
+            for index, (name, phone) in enumerate(SEED_STAFF, start=1):
+                old_staff.objects.create(id=index, name=name, phone=phone)
+            return old_staff, OldUser
 
         OldStaff = self.model_at('users', 'Staff')
         OldUser = self.model_at('auth', 'User')
         OldStaff.objects.all().delete()
         OldUser.objects.all().delete()
-        # 先归零序列、再播种，保证 王敏=1 李磊=2 赵倩=3，冲突人员 4..9
-        self._reset_sequences()
-        for name, phone in SEED_STAFF:
-            OldStaff.objects.create(name=name, phone=phone)
+        # 显式主键播种：王敏=1 李磊=2 赵倩=3（可空 user 列留空即可）
+        for index, (name, phone) in enumerate(SEED_STAFF, start=1):
+            OldStaff.objects.create(id=index, name=name, phone=phone)
         return OldStaff, OldUser
 
     def create_conflict_data(self, OldStaff, OldUser):
@@ -157,8 +142,9 @@ class StaffLoginAccountUpgradeTests(TransactionTestCase):
             ordinary[item['username']] = (u.id, item['active'])
 
         by_name = {}
-        for name, phone in CONFLICT_STAFF:
-            by_name[name] = OldStaff.objects.create(name=name, phone=phone)
+        # 显式主键 4..9：跨后端、跨用例稳定，无需依赖序列重置
+        for index, (name, phone) in enumerate(CONFLICT_STAFF, start=4):
+            by_name[name] = OldStaff.objects.create(id=index, name=name, phone=phone)
 
         # 楚停用：空手机号回退名 staff{id} 恰好被一个停用普通账号占用
         chu = by_name['楚停用']
@@ -281,29 +267,23 @@ class StaffLoginAccountUpgradeTests(TransactionTestCase):
                          conflict='重入 backfill', detail={})
 
     def test_failed_upgrade_rolls_back_entirely(self):
-        """回填后抛错：列随 DDL 事务回滚消失、账号无残留、迁移未记录，且可重试成功。"""
-        # 真正“从未有 user_id 列”的旧库；此后升级前只用原生 SQL 访问 users_staff
-        self.reset_to_old_baseline(physically_old=True)
+        """回填后抛错：列随 DDL 事务回滚消失、账号无残留、迁移未记录，且可重试成功。
 
-        ph = '?' if connection.vendor == 'sqlite' else '%s'
-        with connection.cursor() as cur:
-            # 普通账号（启用/停用混排）
-            cur.executemany(
-                f"INSERT INTO auth_user (username, password, is_active, is_staff, "
-                f"is_superuser, first_name, last_name, email, date_joined) "
-                f"VALUES ({ph}, 'x', {ph}, 0, 0, '', '', '', '2026-01-01 00:00:00')",
-                [('13900001111', 1), ('wangmin', 0)],
-            )
-            # 两名冲突人员（同手机号）与一名空号人员
-            cur.executemany(
-                f"INSERT INTO users_staff (name, phone, created_at) VALUES ({ph}, {ph}, '2026-01-01 00:00:00')",
-                [('孙水电', '13900001111'), ('冯同号', '13900001111'), ('周空号', '')],
-            )
-            cur.execute("SELECT COUNT(*) FROM auth_user")
-            users_before = cur.fetchone()[0]
-            staff_before = 6  # 3 播种 + 3 冲突
-            cur.execute("SELECT id, username, is_active FROM auth_user ORDER BY id")
-            ordinary_before = {r[1]: (r[0], bool(r[2])) for r in cur.fetchall()}
+        全程使用 Django 跨后端 API（Schema Editor 删列、内省读列、ORM/标准
+        COUNT SQL），SQLite 与 PostgreSQL 走同一套代码，不跳过回滚场景。
+        """
+        # 真正“从未有 user_id 列”的物理旧表；用 0002 历史模型构造旧数据
+        OldStaff, OldUser = self.reset_to_old_baseline(physically_old=True)
+        ordinary_before, _ = self.create_conflict_data(OldStaff, OldUser)
+        users_before = OldUser.objects.count()
+        staff_before = OldStaff.objects.count()
+
+        self.stage_check(
+            '升级前-旧表无 user_id 列',
+            'user_id' not in self._column_names('users_staff'),
+            conflict='物理旧表（含启用/停用普通账号、同号与空号人员混排）',
+            detail={'columns': sorted(self._column_names('users_staff'))},
+        )
 
         from django.db import connections
         from django.db.migrations.executor import MigrationExecutor
@@ -325,25 +305,20 @@ class StaffLoginAccountUpgradeTests(TransactionTestCase):
         finally:
             run_python.code = real_code
 
-        # 全程原生 SQL 校验残留（此时列应已随事务回滚消失）
+        # 跨后端内省读列；计数用标准 SQL，参数绑定统一用 Django 的 %s（两种后端通用）
+        col_names = self._column_names('users_staff')
         with connection.cursor() as cur:
-            if connection.vendor == 'sqlite':
-                cur.execute("PRAGMA table_info(users_staff)")
-                col_names = {row[1] for row in cur.fetchall()}
-            else:
-                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users_staff'")
-                col_names = {row[0] for row in cur.fetchall()}
-            cur.execute("SELECT COUNT(*) FROM django_migrations WHERE app='users' AND name=%s"
-                        if connection.vendor == 'postgresql'
-                        else "SELECT COUNT(*) FROM django_migrations WHERE app='users' AND name=?",
-                        [MIGRATION_NEW])
+            cur.execute(
+                "SELECT COUNT(*) FROM django_migrations WHERE app='users' AND name=%s",
+                [MIGRATION_NEW],
+            )
             recorded = cur.fetchone()[0]
             cur.execute("SELECT COUNT(*) FROM auth_user")
             users_now = cur.fetchone()[0]
             cur.execute("SELECT COUNT(*) FROM users_staff")
             staff_now = cur.fetchone()[0]
 
-        self.stage_check('回滚-user_id 列消失', 'user_id' not in col_names,
+        self.stage_check('回滚-user_id 列随 DDL 事务消失', 'user_id' not in col_names,
                          conflict='回填后注入失败', detail={'columns': sorted(col_names)})
         self.stage_check('回滚-迁移未记录', recorded == 0,
                          conflict='回填后注入失败', detail={'recorded': recorded})
@@ -352,7 +327,7 @@ class StaffLoginAccountUpgradeTests(TransactionTestCase):
         self.stage_check('回滚-人员数量不变', staff_now == staff_before,
                          conflict='回填后注入失败', detail={'before': staff_before, 'after': staff_now})
 
-        # 库处于可重试原状：正式升级必须成功并全员关联（此时列已重建，可用 ORM）
+        # 库处于可重试原状：正式升级必须成功并全员关联（此时列已重建，可用当前 ORM）
         call_command('migrate', 'users', verbosity=0, interactive=False)
         Staff = self.model_at('users', 'Staff')
         self.stage_check('失败后重试-全员关联成功',
